@@ -1,32 +1,86 @@
 services:
 
+  # ── 1. PostgreSQL ──────────────────────────────────────────────────────────
+  # Unchanged from before. Stores transactions and model predictions.
   postgres:
     image: postgres:15
     container_name: fraud_postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # init.sql runs automatically on first boot, creating your tables
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     restart: always
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d fraud_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # ── 2. MinIO (S3-compatible object storage) ────────────────────────────────
+  # Stores MLflow artifacts (models, plots, metadata).
+  # Your code uses boto3 to talk to it — same SDK as real AWS S3.
+  minio:
+    image: minio/minio:latest
+    container_name: fraud_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"   # S3 API — your code talks here
+      - "9001:9001"   # Web console — you browse here
+    volumes:
+      - minio_data:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 3. MinIO bucket setup (runs once then exits) ───────────────────────────
+  # MinIO starts empty. This helper container creates the bucket MLflow
+  # needs to store artifacts. It uses `mc` (MinIO Client CLI).
+  # `depends_on` with healthy ensures MinIO is ready before we try.
+  minio-setup:
+    image: minio/mc:latest
+    container_name: fraud_minio_setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing local/mlflow-artifacts;
+      echo 'Bucket ready.';
+      "
+    restart: "no"   # runs once and exits — not a long-running service
+
+  # ── 4. MLflow Tracking Server ──────────────────────────────────────────────
+  # Tracks experiments: parameters, metrics, and model versions.
+  # Uses Postgres as its database backend (experiment metadata).
+  # Uses MinIO as its artifact backend (actual model files).
   mlflow:
     build:
       context: .
       dockerfile: Dockerfile.mlflow
     container_name: fraud_mlflow
+    environment:
+      # MLflow needs AWS-style env vars to authenticate with MinIO
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      # This tells boto3 to talk to MinIO instead of real AWS
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
     command: >
       mlflow server
-      --backend-store-uri postgresql://admin:admin@postgres:5432/fraud_db
-      --default-artifact-root /mlruns
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      --default-artifact-root s3://mlflow-artifacts/
       --host 0.0.0.0
       --port 5000
     ports:
@@ -36,8 +90,97 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── 5. Model Trainer (runs once then exits) ────────────────────────────────
+  # Trains XGBoost, logs to MLflow, registers model. Then exits.
+  # We'll build training/Dockerfile in Step 8.
+  trainer:
+    build:
+      context: ./training
+      dockerfile: Dockerfile
+    container_name: fraud_trainer
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME}
+      MODEL_NAME: ${MODEL_NAME}
+      # Same MinIO credentials — trainer uploads artifacts directly
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: "no"
+
+  # ── 6. FastAPI Prediction API ──────────────────────────────────────────────
+  # Loads the trained model from MLflow/MinIO, serves predictions,
+  # logs results to Postgres, exposes /metrics for Prometheus.
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: fraud_api
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: ${MODEL_NAME}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+    ports:
+      - "8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+      trainer:
+        condition: service_completed_successfully
+    restart: always
+
+  # ── 7. Prometheus ──────────────────────────────────────────────────────────
+  # Scrapes /metrics from the FastAPI app every 15 seconds.
+  # Stores time-series data (request counts, latencies, errors).
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: fraud_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      # Config file tells Prometheus where to scrape
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - api
+    restart: always
+
+  # ── 8. Grafana ─────────────────────────────────────────────────────────────
+  # Connects to Prometheus and renders dashboards.
+  # Default login: admin / admin (change in .env for real projects)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: fraud_grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Pre-loads Prometheus as a data source automatically
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
     restart: always
 
 volumes:
   postgres_data:
   mlflow_data:
+  minio_data:
+  grafana_data:

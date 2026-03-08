@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s   # scrape every 15 seconds
+
+scrape_configs:
+  - job_name: "fraud-api"
+    static_configs:
+      # "api" is the Docker service name — containers resolve each
+      # other by service name on Docker's internal network
+      - targets: ["api:8000"]
