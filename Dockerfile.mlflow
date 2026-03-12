@@ -1,5 +1,8 @@
 FROM python:3.10-slim
 
-RUN pip install --no-cache-dir mlflow psycopg2-binary
+RUN pip install --no-cache-dir \
+    mlflow==2.13.0 \
+    psycopg2-binary==2.9.9 \
+    boto3==1.34.0
 
 EXPOSE 5000

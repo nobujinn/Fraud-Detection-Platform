@@ -1,0 +1,10 @@
+fastapi==0.111.0
+uvicorn==0.29.0          # the server that runs FastAPI
+sqlalchemy==2.0.30       # database ORM
+psycopg2-binary==2.9.9   # PostgreSQL driver (what SQLAlchemy uses under the hood)
+mlflow==2.13.0           # to load the trained model
+xgboost==2.0.3           # the model itself
+numpy==1.26.4            # array operations for model input
+pydantic==2.7.1          # data validation (built into FastAPI)
+boto3==1.34.0            # AWS SDK — talks to MinIO using S3 API
+prometheus-fastapi-instrumentator==6.1.0  # adds /metrics endpoint in one line
