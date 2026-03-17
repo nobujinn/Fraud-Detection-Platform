@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 # All config comes from environment variables — never hardcoded.
 # Docker Compose injects these from your .env file at startup.
 #
-MLFLOW_URI       = os.getenv("MLFLOW_TRACKING_URI",    "http://mlflow:5000")
-EXPERIMENT       = os.getenv("MLFLOW_EXPERIMENT_NAME", "fraud-detection")
-DATABASE_URL     = os.getenv("DATABASE_URL",           "postgresql://admin:admin@postgres:5432/fraud_db")
-MODEL_NAME       = os.getenv("MODEL_NAME",             "fraud-detection-model")
+MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+EXPERIMENT = os.getenv("MLFLOW_EXPERIMENT_NAME", "fraud-detection")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:admin@postgres:5432/fraud_db")
+MODEL_NAME = os.getenv("MODEL_NAME", "fraud-detection-model")
 
 
 # These are the columns model learns from.
@@ -53,14 +53,14 @@ FEATURES = [
 # Rule of thumb: set it to (number of legitimate / number of fraud).
 #
 PARAMS = {
-    "n_estimators":     200,    # number of trees
-    "max_depth":        6,      # how deep each tree grows
-    "learning_rate":    0.1,    # how much each tree corrects the previous
-    "subsample":        0.8,    # use 80% of rows per tree (reduces overfitting)
+    "n_estimators": 200,    # number of trees
+    "max_depth": 6,      # how deep each tree grows
+    "learning_rate": 0.1,    # how much each tree corrects the previous
+    "subsample": 0.8,    # use 80% of rows per tree (reduces overfitting)
     "colsample_bytree": 0.8,    # use 80% of features per tree
     "scale_pos_weight": 10,     # compensates for fraud being rare
-    "eval_metric":      "logloss",
-    "random_state":     42,
+    "eval_metric": "logloss",
+    "random_state": 42,
 }
 
 
@@ -109,26 +109,26 @@ def generate_synthetic(n: int = 10_000) -> pd.DataFrame:
 
     # Legitimate transactions — normal patterns
     legit = pd.DataFrame({
-        "amount":             rng.lognormal(3.5, 1.2, n_legit),   # ~$33 median
-        "hour_of_day":        rng.integers(6, 23,  n_legit),      # daytime
-        "day_of_week":        rng.integers(0, 7,   n_legit),
-        "merchant_category":  rng.integers(0, 20,  n_legit),
+        "amount": rng.lognormal(3.5, 1.2, n_legit),   # ~$33 median
+        "hour_of_day": rng.integers(6, 23,  n_legit),      # daytime
+        "day_of_week": rng.integers(0, 7,   n_legit),
+        "merchant_category": rng.integers(0, 20,  n_legit),
         "distance_from_home": rng.exponential(20,  n_legit),      # close to home
-        "transaction_count":  rng.integers(1, 10,  n_legit),
-        "is_foreign":         rng.integers(0, 2,   n_legit),
-        "is_fraud":           np.zeros(n_legit, int),
+        "transaction_count": rng.integers(1, 10,  n_legit),
+        "is_foreign": rng.integers(0, 2,   n_legit),
+        "is_fraud": np.zeros(n_legit, int),
     })
 
     # Fraudulent transactions — suspicious patterns
     fraud = pd.DataFrame({
-        "amount":             rng.lognormal(5.0, 1.5, n_fraud),   # ~$148 median, higher variance
-        "hour_of_day":        rng.integers(0, 5,   n_fraud),      # late night
-        "day_of_week":        rng.integers(0, 7,   n_fraud),
-        "merchant_category":  rng.integers(0, 20,  n_fraud),
+        "amount": rng.lognormal(5.0, 1.5, n_fraud),   # ~$148 median, higher variance
+        "hour_of_day": rng.integers(0, 5,   n_fraud),      # late night
+        "day_of_week": rng.integers(0, 7,   n_fraud),
+        "merchant_category": rng.integers(0, 20,  n_fraud),
         "distance_from_home": rng.exponential(200, n_fraud),      # far from home
-        "transaction_count":  rng.integers(5, 30,  n_fraud),      # many transactions
-        "is_foreign":         rng.choice([0, 1], n_fraud, p=[0.2, 0.8]),  # mostly foreign
-        "is_fraud":           np.ones(n_fraud, int),
+        "transaction_count": rng.integers(5, 30,  n_fraud),      # many transactions
+        "is_foreign": rng.choice([0, 1], n_fraud, p=[0.2, 0.8]),  # mostly foreign
+        "is_fraud": np.ones(n_fraud, int),
     })
 
     # Combine and shuffle so fraud isn't all at the end
@@ -186,11 +186,11 @@ def train():
         y_prob = model.predict_proba(X_test)[:, 1]  # probability of fraud
 
         metrics = {
-            "accuracy":  accuracy_score(y_test, y_pred),
+            "accuracy": accuracy_score(y_test, y_pred),
             "precision": precision_score(y_test, y_pred, zero_division=0),
-            "recall":    recall_score(y_test, y_pred, zero_division=0),
-            "f1":        f1_score(y_test, y_pred, zero_division=0),
-            "roc_auc":   roc_auc_score(y_test, y_prob),
+            "recall": recall_score(y_test, y_pred, zero_division=0),
+            "f1": f1_score(y_test, y_pred, zero_division=0),
+            "roc_auc": roc_auc_score(y_test, y_prob),
         }
 
         for name, value in metrics.items():
@@ -219,9 +219,9 @@ def train():
         )
 
         run_id = mlflow.active_run().info.run_id
-        logger.info(f"✅ Training complete. Run ID: {run_id}")
-        logger.info(f"   Model registered as: {MODEL_NAME}")
-        logger.info(f"   Artifacts stored in: MinIO (s3://mlflow-artifacts/)")
+        logger.info(f"Training complete. Run ID: {run_id}")
+        logger.info(f"Model registered as: {MODEL_NAME}")
+        logger.info(f"Artifacts stored in: MinIO (s3://mlflow-artifacts/)")
 
 
 if __name__ == "__main__":
