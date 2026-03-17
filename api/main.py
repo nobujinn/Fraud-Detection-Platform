@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
     global model
     try:
         mlflow.set_tracking_uri(MLFLOW_URI)
-        model = mlflow.xgboost.load_model(f"models:/{MODEL_NAME}/production")
+        model = mlflow.xgboost.load_model(f"models:/{MODEL_NAME}/1")
         logger.info(f"Model {MODEL_NAME} loaded successfully from MLflow.")
     except Exception as e:
         logger.warning(f"Failed to load model from MLflow: {e}")
@@ -98,11 +98,13 @@ class BatchPredictionResponse(BaseModel):
 # Run the model inference for a single transaction and log the prediction to the database
 def run_inference(tx: TransactionRequest, db:Session) -> PredictionResponse:
     features = np.array(
-        [[getattr(tx, f) for f in FEATURES]],
-        dtype=float
+    [[getattr(tx, f) for f in FEATURES]],
+    dtype=float
     )
 
-    prob = float(model.predict_proba(features)[0][1])
+    # predict() returns raw probability for binary classification
+    probs = model.predict(features)
+    prob = float(probs[0])
     is_fraud = int(prob >= 0.5)
     verdict = "FRAUDULENT" if is_fraud else "LEGITIMATE"
 
@@ -141,3 +143,31 @@ def predict(transaction: TransactionRequest, db: Session = Depends(get_db)):
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded. Please try again later.")
     return run_inference(transaction, db)
+
+# Predict fraudulence for multiple transactions in a batch
+@app.post("/predict/batch", response_model=List[BatchPredictionResponse], tags=["Predictions"])
+def predict_batch(body: BatchRequest, db: Session = Depends(get_db)):
+    if model is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="Model not loaded. Check MLflow and trainer logs."
+        )
+    
+    results = []
+    for i, tx in enumerate(body.transactions):
+        try:
+            prediction = run_inference(tx, db)
+            results.append(BatchPredictionResponse(
+                index=i,
+                is_fraud=prediction.is_fraud,
+                fraud_probability=prediction.fraud_probability,
+                verdict=prediction.verdict
+            ))
+        except Exception as e:
+            logger.error(f"Batchi item {i} failed: {e}")
+            results.append(BatchPredictionResponse(
+                index=i,
+                error=str(e)
+            ))
+
+    return results
