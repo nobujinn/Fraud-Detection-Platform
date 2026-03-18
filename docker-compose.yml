@@ -169,11 +169,14 @@ services:
     container_name: fraud_grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      # Pass DB credentials so provisioning files can use them
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
-      # Pre-loads Prometheus as a data source automatically
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
